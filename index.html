@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FlockRoute — Navigate Around ALPRs</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="/src/style.css" />
+</head>
+<body>
+  <div id="app">
+    <div id="sidebar">
+      <h1>FlockRoute</h1>
+      <p class="subtitle">Find routes that avoid license plate readers</p>
+
+      <div class="search-section">
+        <div class="input-group">
+          <label for="origin-input">Start</label>
+          <input id="origin-input" type="text" placeholder="Click map or search address..." autocomplete="off" />
+          <div id="origin-suggestions" class="suggestions"></div>
+        </div>
+        <div class="input-group">
+          <label for="dest-input">Destination</label>
+          <input id="dest-input" type="text" placeholder="Click map or search address..." autocomplete="off" />
+          <div id="dest-suggestions" class="suggestions"></div>
+        </div>
+        <button id="route-btn" disabled>Find Routes</button>
+        <button id="clear-btn" class="secondary">Clear</button>
+      </div>
+
+      <div id="routes-panel" class="hidden">
+        <h2>Routes</h2>
+        <div id="routes-list"></div>
+      </div>
+
+      <div id="status-bar">
+        <span id="status-text">Click the map to set start and destination points</span>
+      </div>
+
+      <div class="info-section">
+        <details>
+          <summary>About</summary>
+          <p>FlockRoute uses <a href="https://www.openstreetmap.org" target="_blank">OpenStreetMap</a> data to show
+            ALPR (Automatic License Plate Reader) cameras and helps you find routes that minimize surveillance exposure.</p>
+          <p>Camera data from <a href="https://deflock.org" target="_blank">DeFlock</a> / OSM contributors.
+            Routing by <a href="https://project-osrm.org" target="_blank">OSRM</a>.</p>
+        </details>
+      </div>
+    </div>
+    <div id="map"></div>
+  </div>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>
