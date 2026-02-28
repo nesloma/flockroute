@@ -178,12 +178,16 @@ routeBtn.addEventListener('click', async () => {
     renderRoutesPanel(currentAnalyses, selectRoute, activeRouteIndex);
 
     const totalCameras = currentCameras.length;
-    const bestCount = currentAnalyses[0].alprCount;
+    const best = currentAnalyses[0];
     if (totalCameras === 0) {
       setStatus(`${routes.length} route(s) found. No ALPR cameras detected in this area.`);
+    } else if (best.alprCount === 0) {
+      setStatus(
+        `${totalCameras} ALPR camera(s) in area. Camera-free route found!`,
+      );
     } else {
       setStatus(
-        `${totalCameras} ALPR camera(s) found in area. Best route passes ${bestCount} camera(s).`,
+        `${totalCameras} ALPR camera(s) in area. Best route passes ${best.alprCount} camera(s).`,
       );
     }
   } catch (err) {

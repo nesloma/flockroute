@@ -204,8 +204,18 @@ button {
   margin-bottom: 8px;
 }
 
+.badge-free {
+  background: #00d4aa;
+  color: #0a0a1a;
+}
+
 .badge-best {
   background: #00d4aa;
+  color: #0a0a1a;
+}
+
+.badge-direct {
+  background: #4da6ff;
   color: #0a0a1a;
 }
 
