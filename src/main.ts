@@ -3,7 +3,7 @@ import { renderRoutesPanel } from './ui/panel';
 import { fetchALPRCameras, type ALPRCamera } from './services/overpass';
 import { fetchRoutes, fetchRouteViaWaypoints } from './services/routing';
 import { searchAddress, reverseGeocode } from './services/geocoding';
-import { analyzeRoutes, computeAvoidanceWaypoints, computeClusteredAvoidanceWaypoints, routesBoundingBox, type RouteAnalysis } from './services/analysis';
+import { analyzeRoutes, computeBracketWaypoints, routesBoundingBox, type RouteAnalysis } from './services/analysis';
 
 // State
 let origin: { lat: number; lng: number } | null = null;
@@ -167,32 +167,56 @@ routeBtn.addEventListener('click', async () => {
     let allRoutes = [...routes];
     currentAnalyses = analyzeRoutes(allRoutes, currentCameras);
 
-    // Step 3b: If no camera-free route, try multiple avoidance strategies
+    // Step 3b: If no camera-free route, iteratively try to find one
+    // using bracket waypoints around each camera at various offsets/sides.
     if (currentAnalyses[0].alprCount > 0 && currentCameras.length > 0) {
       setStatus('Searching for camera-free route...', true);
 
-      // Build a list of avoidance attempts with different strategies
-      const offsets = [0.5, 1, 2, 3];
-      const sides: Array<'auto' | 'left' | 'right'> = ['auto', 'left', 'right'];
+      // Bracket distances scale with route length
+      const routeLengthKm = currentAnalyses[0].route.distance / 1000;
+      const baseBracket = Math.max(0.15, Math.min(routeLengthKm * 0.1, 0.5));
+
+      // Offset/bracket combos to try — small offsets first (parallel streets)
+      const configs: { offsetKm: number; bracketKm: number; side: 'auto' | 'left' | 'right' }[] = [
+        // Tight offsets: parallel/residential streets
+        { offsetKm: 0.2, bracketKm: baseBracket, side: 'auto' },
+        { offsetKm: 0.2, bracketKm: baseBracket, side: 'left' },
+        { offsetKm: 0.2, bracketKm: baseBracket, side: 'right' },
+        // Medium offsets
+        { offsetKm: 0.5, bracketKm: baseBracket * 1.5, side: 'auto' },
+        { offsetKm: 0.5, bracketKm: baseBracket * 1.5, side: 'left' },
+        { offsetKm: 0.5, bracketKm: baseBracket * 1.5, side: 'right' },
+        // Wider offsets
+        { offsetKm: 1.0, bracketKm: baseBracket * 2, side: 'auto' },
+        { offsetKm: 1.0, bracketKm: baseBracket * 2, side: 'left' },
+        { offsetKm: 1.0, bracketKm: baseBracket * 2, side: 'right' },
+        // Very wide
+        { offsetKm: 2.0, bracketKm: baseBracket * 3, side: 'auto' },
+        { offsetKm: 2.0, bracketKm: baseBracket * 3, side: 'left' },
+        { offsetKm: 2.0, bracketKm: baseBracket * 3, side: 'right' },
+      ];
+
       let bestAnalyses = currentAnalyses;
       let bestAllRoutes = allRoutes;
       let bestCameras = currentCameras;
 
-      for (const offsetKm of offsets) {
+      // Iterative: use the best route so far as the base for the next attempt
+      const MAX_ITERATIONS = 3;
+      for (let iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
         if (bestAnalyses[0].alprCount === 0) break;
 
-        for (const side of sides) {
+        const baseRoute = bestAnalyses[0]; // always use current best
+
+        for (const cfg of configs) {
           if (bestAnalyses[0].alprCount === 0) break;
 
-          // Use each existing route as a base for avoidance
-          const baseAnalysis = bestAnalyses.find((a) => a.isDirect) ?? bestAnalyses[0];
-
-          const waypoints = computeClusteredAvoidanceWaypoints(
-            baseAnalysis.route,
+          const waypoints = computeBracketWaypoints(
+            baseRoute.route,
             bestCameras,
-            baseAnalysis.nearbyCameraIds,
-            offsetKm,
-            side,
+            baseRoute.nearbyCameraIds,
+            cfg.bracketKm,
+            cfg.offsetKm,
+            cfg.side,
           );
 
           if (waypoints.length === 0) continue;
@@ -206,49 +230,16 @@ routeBtn.addEventListener('click', async () => {
             const moreCameras = await fetchALPRCameras(expandedBbox);
             const candidateAnalyses = analyzeRoutes(candidateRoutes, moreCameras);
 
-            // Keep this result if it's better than what we had
             if (candidateAnalyses[0].alprCount < bestAnalyses[0].alprCount) {
               bestAnalyses = candidateAnalyses;
               bestAllRoutes = candidateRoutes;
               bestCameras = moreCameras;
+              // Found improvement — break inner loop to re-iterate with new base
+              break;
             }
           } catch {
-            // OSRM or Overpass might fail for extreme waypoints; skip
             continue;
           }
-        }
-      }
-
-      // Also try the simple single-centroid approach at different offsets
-      for (const offsetKm of offsets) {
-        if (bestAnalyses[0].alprCount === 0) break;
-
-        const baseAnalysis = bestAnalyses.find((a) => a.isDirect) ?? bestAnalyses[0];
-        const waypoints = computeAvoidanceWaypoints(
-          baseAnalysis.route,
-          bestCameras,
-          baseAnalysis.nearbyCameraIds,
-          offsetKm,
-        );
-
-        if (waypoints.length === 0) continue;
-
-        try {
-          const avoidanceRoutes = await fetchRouteViaWaypoints(origin, destination, waypoints);
-          if (avoidanceRoutes.length === 0) continue;
-
-          const candidateRoutes = [...bestAllRoutes, ...avoidanceRoutes];
-          const expandedBbox = routesBoundingBox(candidateRoutes);
-          const moreCameras = await fetchALPRCameras(expandedBbox);
-          const candidateAnalyses = analyzeRoutes(candidateRoutes, moreCameras);
-
-          if (candidateAnalyses[0].alprCount < bestAnalyses[0].alprCount) {
-            bestAnalyses = candidateAnalyses;
-            bestAllRoutes = candidateRoutes;
-            bestCameras = moreCameras;
-          }
-        } catch {
-          continue;
         }
       }
 
