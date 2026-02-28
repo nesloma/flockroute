@@ -86,6 +86,54 @@ export function analyzeRoutes(
 }
 
 /**
+ * Given a route with cameras nearby, compute waypoints that detour around
+ * those cameras. Returns 1-2 waypoints to pass through for avoidance routing.
+ */
+export function computeAvoidanceWaypoints(
+  route: Route,
+  cameras: ALPRCamera[],
+  nearbyCameraIds: Set<number>,
+  offsetKm: number = 1,
+): { lat: number; lng: number }[] {
+  const nearbyCameras = cameras.filter((c) => nearbyCameraIds.has(c.id));
+  if (nearbyCameras.length === 0) return [];
+
+  const lineCoords = route.geometry.map(([lat, lng]) => [lng, lat] as [number, number]);
+  const line = turf.lineString(lineCoords);
+
+  // Find centroid of cameras near the route
+  const camPoints = turf.points(nearbyCameras.map((c) => [c.lon, c.lat]));
+  const centroid = turf.center(camPoints);
+
+  // Find the point on the route nearest to camera centroid
+  const nearest = turf.nearestPointOnLine(line, centroid);
+  const idx = nearest.properties.index ?? 0;
+  const nextIdx = Math.min(idx + 1, lineCoords.length - 1);
+
+  // Route bearing at the nearest point
+  const routeBearing = turf.bearing(
+    turf.point(lineCoords[idx]),
+    turf.point(lineCoords[nextIdx]),
+  );
+
+  // Two perpendicular candidates (left and right of route)
+  const nearestCoords = nearest.geometry.coordinates as [number, number];
+  const perpBearing1 = routeBearing + 90;
+  const perpBearing2 = routeBearing - 90;
+
+  const wp1 = turf.destination(turf.point(nearestCoords), offsetKm, perpBearing1, { units: 'kilometers' });
+  const wp2 = turf.destination(turf.point(nearestCoords), offsetKm, perpBearing2, { units: 'kilometers' });
+
+  // Pick the side that's further from the camera centroid (away from cameras)
+  const dist1 = turf.distance(wp1, centroid, { units: 'kilometers' });
+  const dist2 = turf.distance(wp2, centroid, { units: 'kilometers' });
+  const bestWp = dist1 > dist2 ? wp1 : wp2;
+
+  const [lng, lat] = bestWp.geometry.coordinates;
+  return [{ lat, lng }];
+}
+
+/**
  * Compute a bounding box that covers all routes with some padding.
  */
 export function routesBoundingBox(routes: Route[]): { south: number; west: number; north: number; east: number } {
