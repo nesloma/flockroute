@@ -1,9 +1,9 @@
 import { MapController } from './ui/map';
 import { renderRoutesPanel } from './ui/panel';
 import { fetchALPRCameras, type ALPRCamera } from './services/overpass';
-import { fetchRoutes } from './services/routing';
+import { fetchRoutes, fetchRouteViaWaypoints } from './services/routing';
 import { searchAddress, reverseGeocode } from './services/geocoding';
-import { analyzeRoutes, routesBoundingBox, type RouteAnalysis } from './services/analysis';
+import { analyzeRoutes, computeAvoidanceWaypoints, routesBoundingBox, type RouteAnalysis } from './services/analysis';
 
 // State
 let origin: { lat: number; lng: number } | null = null;
@@ -164,7 +164,31 @@ routeBtn.addEventListener('click', async () => {
 
     // Step 3: Analyze routes against cameras
     setStatus('Analyzing surveillance exposure...', true);
-    currentAnalyses = analyzeRoutes(routes, currentCameras);
+    let allRoutes = [...routes];
+    currentAnalyses = analyzeRoutes(allRoutes, currentCameras);
+
+    // Step 3b: If no camera-free route, try generating avoidance routes
+    if (currentAnalyses[0].alprCount > 0 && currentCameras.length > 0) {
+      setStatus('Searching for camera-free route...', true);
+      const directAnalysis = currentAnalyses.find((a) => a.isDirect) ?? currentAnalyses[0];
+      const waypoints = computeAvoidanceWaypoints(
+        directAnalysis.route,
+        currentCameras,
+        directAnalysis.nearbyCameraIds,
+      );
+
+      if (waypoints.length > 0) {
+        const avoidanceRoutes = await fetchRouteViaWaypoints(origin, destination, waypoints);
+        if (avoidanceRoutes.length > 0) {
+          allRoutes = [...routes, ...avoidanceRoutes];
+          // Re-fetch cameras for expanded area
+          const expandedBbox = routesBoundingBox(allRoutes);
+          const moreCameras = await fetchALPRCameras(expandedBbox);
+          currentCameras = moreCameras;
+          currentAnalyses = analyzeRoutes(allRoutes, currentCameras);
+        }
+      }
+    }
 
     // Step 4: Display results
     const allNearbyCameraIds = new Set<number>();

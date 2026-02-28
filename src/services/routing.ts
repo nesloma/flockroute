@@ -17,6 +17,20 @@ export interface Route {
 
 const OSRM_BASE = 'https://router.project-osrm.org';
 
+function parseOSRMRoutes(data: Record<string, unknown>): Route[] {
+  const routes = data.routes as Record<string, unknown>[];
+  return routes.map((route) => {
+    const geo = route.geometry as { coordinates: [number, number][] };
+    const legs = route.legs as { summary: string }[];
+    return {
+      geometry: geo.coordinates.map(([lng, lat]) => [lat, lng] as [number, number]),
+      distance: route.distance as number,
+      duration: route.duration as number,
+      summary: legs.map((l) => l.summary).join(' / ') || 'Route',
+    };
+  });
+}
+
 export async function fetchRoutes(origin: LatLng, destination: LatLng): Promise<Route[]> {
   const coords = `${origin.lng},${origin.lat};${destination.lng},${destination.lat}`;
   const url = `${OSRM_BASE}/route/v1/driving/${coords}?alternatives=3&overview=full&geometries=geojson&steps=true`;
@@ -31,14 +45,27 @@ export async function fetchRoutes(origin: LatLng, destination: LatLng): Promise<
     throw new Error(`OSRM: ${data.code} - ${data.message || 'No route found'}`);
   }
 
-  return data.routes.map((route: Record<string, unknown>) => {
-    const geo = route.geometry as { coordinates: [number, number][] };
-    const legs = route.legs as { summary: string }[];
-    return {
-      geometry: geo.coordinates.map(([lng, lat]) => [lat, lng] as [number, number]),
-      distance: route.distance as number,
-      duration: route.duration as number,
-      summary: legs.map((l) => l.summary).join(' / ') || 'Route',
-    };
-  });
+  return parseOSRMRoutes(data);
+}
+
+/**
+ * Fetch a route that passes through intermediate waypoints.
+ * Used to generate camera-avoidance detour routes.
+ */
+export async function fetchRouteViaWaypoints(
+  origin: LatLng,
+  destination: LatLng,
+  waypoints: LatLng[],
+): Promise<Route[]> {
+  const allPoints = [origin, ...waypoints, destination];
+  const coords = allPoints.map((p) => `${p.lng},${p.lat}`).join(';');
+  const url = `${OSRM_BASE}/route/v1/driving/${coords}?overview=full&geometries=geojson&steps=true`;
+
+  const response = await fetch(url);
+  if (!response.ok) return [];
+
+  const data = await response.json();
+  if (data.code !== 'Ok') return [];
+
+  return parseOSRMRoutes(data);
 }
