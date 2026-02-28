@@ -86,63 +86,21 @@ export function analyzeRoutes(
 }
 
 /**
- * Given a route with cameras nearby, compute waypoints that detour around
- * those cameras. Returns 1-2 waypoints to pass through for avoidance routing.
+ * For each camera near the route, compute a pair of "bracket" waypoints:
+ * one before the camera and one after, both offset to the same side.
+ * This forces OSRM to leave the main road before reaching each camera
+ * and rejoin after passing it — much more effective than a single midpoint.
+ *
+ * @param bracketKm  how far before/after each camera (along route) to place brackets
+ * @param offsetKm   how far to the side of the route to offset each bracket
+ * @param side       which side of the route to offset toward
  */
-export function computeAvoidanceWaypoints(
+export function computeBracketWaypoints(
   route: Route,
   cameras: ALPRCamera[],
   nearbyCameraIds: Set<number>,
-  offsetKm: number = 1,
-): { lat: number; lng: number }[] {
-  const nearbyCameras = cameras.filter((c) => nearbyCameraIds.has(c.id));
-  if (nearbyCameras.length === 0) return [];
-
-  const lineCoords = route.geometry.map(([lat, lng]) => [lng, lat] as [number, number]);
-  const line = turf.lineString(lineCoords);
-
-  // Find centroid of cameras near the route
-  const camPoints = turf.points(nearbyCameras.map((c) => [c.lon, c.lat]));
-  const centroid = turf.center(camPoints);
-
-  // Find the point on the route nearest to camera centroid
-  const nearest = turf.nearestPointOnLine(line, centroid);
-  const idx = nearest.properties.index ?? 0;
-  const nextIdx = Math.min(idx + 1, lineCoords.length - 1);
-
-  // Route bearing at the nearest point
-  const routeBearing = turf.bearing(
-    turf.point(lineCoords[idx]),
-    turf.point(lineCoords[nextIdx]),
-  );
-
-  // Two perpendicular candidates (left and right of route)
-  const nearestCoords = nearest.geometry.coordinates as [number, number];
-  const perpBearing1 = routeBearing + 90;
-  const perpBearing2 = routeBearing - 90;
-
-  const wp1 = turf.destination(turf.point(nearestCoords), offsetKm, perpBearing1, { units: 'kilometers' });
-  const wp2 = turf.destination(turf.point(nearestCoords), offsetKm, perpBearing2, { units: 'kilometers' });
-
-  // Pick the side that's further from the camera centroid (away from cameras)
-  const dist1 = turf.distance(wp1, centroid, { units: 'kilometers' });
-  const dist2 = turf.distance(wp2, centroid, { units: 'kilometers' });
-  const bestWp = dist1 > dist2 ? wp1 : wp2;
-
-  const [lng, lat] = bestWp.geometry.coordinates;
-  return [{ lat, lng }];
-}
-
-/**
- * Cluster nearby cameras by their position along the route.
- * Groups cameras that are within `gapKm` of each other along the route line.
- * Returns one waypoint per cluster, enabling detours around each group.
- */
-export function computeClusteredAvoidanceWaypoints(
-  route: Route,
-  cameras: ALPRCamera[],
-  nearbyCameraIds: Set<number>,
-  offsetKm: number = 1,
+  bracketKm: number = 0.3,
+  offsetKm: number = 0.4,
   side: 'auto' | 'left' | 'right' = 'auto',
 ): { lat: number; lng: number }[] {
   const nearbyCameras = cameras.filter((c) => nearbyCameraIds.has(c.id));
@@ -152,77 +110,74 @@ export function computeClusteredAvoidanceWaypoints(
   const line = turf.lineString(lineCoords);
   const routeLength = turf.length(line, { units: 'kilometers' });
 
-  // Project each camera onto the route to get its position along the line
+  if (routeLength < 0.2) return []; // route too short
+
+  // Project each camera onto the route
   const projections = nearbyCameras.map((cam) => {
     const pt = turf.point([cam.lon, cam.lat]);
     const snapped = turf.nearestPointOnLine(line, pt);
     return {
       cam,
       location: snapped.properties.location as number, // km along route
-      point: pt,
     };
   });
-
-  // Sort by position along route
   projections.sort((a, b) => a.location - b.location);
 
-  // Cluster cameras that are within 0.5km of each other along the route
-  const gapKm = 0.5;
-  const clusters: typeof projections[] = [];
-  let currentCluster = [projections[0]];
-
+  // Cluster cameras within 0.3km of each other (merge overlapping brackets)
+  const clusters: { start: number; end: number; cams: typeof projections }[] = [];
+  let cur = { start: projections[0].location, end: projections[0].location, cams: [projections[0]] };
   for (let i = 1; i < projections.length; i++) {
-    if (projections[i].location - projections[i - 1].location <= gapKm) {
-      currentCluster.push(projections[i]);
+    if (projections[i].location - cur.end <= bracketKm * 2) {
+      cur.end = projections[i].location;
+      cur.cams.push(projections[i]);
     } else {
-      clusters.push(currentCluster);
-      currentCluster = [projections[i]];
+      clusters.push(cur);
+      cur = { start: projections[i].location, end: projections[i].location, cams: [projections[i]] };
     }
   }
-  clusters.push(currentCluster);
+  clusters.push(cur);
 
-  // Generate a waypoint for each cluster
   const waypoints: { lat: number; lng: number }[] = [];
+  const minKm = 0.05; // stay away from route endpoints
+  const maxKm = routeLength - 0.05;
 
   for (const cluster of clusters) {
-    // Find the midpoint along the route for this cluster
-    const avgLocation = cluster.reduce((sum, p) => sum + p.location, 0) / cluster.length;
-    // Clamp to avoid going past route endpoints
-    const clampedLocation = Math.max(0.1, Math.min(avgLocation, routeLength - 0.1));
-    const midPoint = turf.along(line, clampedLocation, { units: 'kilometers' });
-    const midCoords = midPoint.geometry.coordinates as [number, number];
+    // Pre-bracket: a point before the first camera in cluster
+    const preLoc = Math.max(minKm, cluster.start - bracketKm);
+    // Post-bracket: a point after the last camera in cluster
+    const postLoc = Math.min(maxKm, cluster.end + bracketKm);
 
-    // Find segment index for bearing calculation
-    const snapped = turf.nearestPointOnLine(line, midPoint);
-    const idx = snapped.properties.index ?? 0;
-    const nextIdx = Math.min(idx + 1, lineCoords.length - 1);
+    for (const loc of [preLoc, postLoc]) {
+      const ptOnLine = turf.along(line, loc, { units: 'kilometers' });
+      const ptCoords = ptOnLine.geometry.coordinates as [number, number];
 
-    const routeBearing = turf.bearing(
-      turf.point(lineCoords[idx]),
-      turf.point(lineCoords[nextIdx]),
-    );
+      // Get route bearing at this point
+      const snapped = turf.nearestPointOnLine(line, ptOnLine);
+      const idx = snapped.properties.index ?? 0;
+      const nextIdx = Math.min(idx + 1, lineCoords.length - 1);
+      const bearing = turf.bearing(
+        turf.point(lineCoords[idx]),
+        turf.point(lineCoords[nextIdx]),
+      );
 
-    const perpBearing1 = routeBearing + 90;
-    const perpBearing2 = routeBearing - 90;
+      const leftWp = turf.destination(turf.point(ptCoords), offsetKm, bearing + 90, { units: 'kilometers' });
+      const rightWp = turf.destination(turf.point(ptCoords), offsetKm, bearing - 90, { units: 'kilometers' });
 
-    const wp1 = turf.destination(turf.point(midCoords), offsetKm, perpBearing1, { units: 'kilometers' });
-    const wp2 = turf.destination(turf.point(midCoords), offsetKm, perpBearing2, { units: 'kilometers' });
+      let chosen;
+      if (side === 'left') {
+        chosen = leftWp;
+      } else if (side === 'right') {
+        chosen = rightWp;
+      } else {
+        // 'auto': pick side away from the camera cluster centroid
+        const camPts = turf.points(cluster.cams.map((p) => [p.cam.lon, p.cam.lat]));
+        const centroid = turf.center(camPts);
+        const dL = turf.distance(leftWp, centroid, { units: 'kilometers' });
+        const dR = turf.distance(rightWp, centroid, { units: 'kilometers' });
+        chosen = dL > dR ? leftWp : rightWp;
+      }
 
-    // Pick which side
-    if (side === 'left') {
-      const [lng, lat] = wp1.geometry.coordinates;
-      waypoints.push({ lat, lng });
-    } else if (side === 'right') {
-      const [lng, lat] = wp2.geometry.coordinates;
-      waypoints.push({ lat, lng });
-    } else {
-      // 'auto': pick side furthest from the cluster's cameras
-      const camPts = turf.points(cluster.map((p) => [p.cam.lon, p.cam.lat]));
-      const centroid = turf.center(camPts);
-      const dist1 = turf.distance(wp1, centroid, { units: 'kilometers' });
-      const dist2 = turf.distance(wp2, centroid, { units: 'kilometers' });
-      const bestWp = dist1 > dist2 ? wp1 : wp2;
-      const [lng, lat] = bestWp.geometry.coordinates;
+      const [lng, lat] = chosen.geometry.coordinates;
       waypoints.push({ lat, lng });
     }
   }
