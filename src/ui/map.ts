@@ -6,8 +6,18 @@ import L from 'leaflet';
 import type { ALPRCamera } from '../services/overpass';
 import type { RouteAnalysis } from '../services/analysis';
 
-const ROUTE_COLORS = ['#00d4aa', '#ffd93d', '#ff9f43', '#a29bfe'];
+const ROUTE_COLOR_FREE = '#00d4aa';   // green - camera free
+const ROUTE_COLOR_BEST = '#00d4aa';    // green - least surveillance
+const ROUTE_COLOR_DIRECT = '#4da6ff';  // blue  - direct/fastest route
+const ROUTE_COLOR_ALT = '#ffd93d';     // yellow - alternatives
 const INACTIVE_ROUTE_COLOR = '#4a5568';
+
+function routeColor(label: string): string {
+  if (label === 'Camera Free') return ROUTE_COLOR_FREE;
+  if (label === 'Least Surveillance') return ROUTE_COLOR_BEST;
+  if (label === 'Direct Route') return ROUTE_COLOR_DIRECT;
+  return ROUTE_COLOR_ALT;
+}
 
 export class MapController {
   map: L.Map;
@@ -93,7 +103,7 @@ export class MapController {
       );
 
       const polyline = L.polyline(coords, {
-        color: isActive ? ROUTE_COLORS[i % ROUTE_COLORS.length] : INACTIVE_ROUTE_COLOR,
+        color: isActive ? routeColor(analyses[i].label) : INACTIVE_ROUTE_COLOR,
         weight: isActive ? 6 : 4,
         opacity: isActive ? 0.9 : 0.4,
       }).addTo(this.map);

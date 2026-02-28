@@ -8,11 +8,15 @@ import * as turf from '@turf/turf';
 import type { ALPRCamera } from './overpass';
 import type { Route } from './routing';
 
+export type RouteLabel = 'Camera Free' | 'Least Surveillance' | 'Direct Route' | string;
+
 export interface RouteAnalysis {
   route: Route;
   alprCount: number;           // cameras within threshold
   nearbyCameraIds: Set<number>; // IDs of cameras near this route
   score: number;               // lower is better (fewer cameras)
+  label: RouteLabel;
+  isDirect: boolean;           // true for fastest/most direct route
 }
 
 /** Default proximity threshold in meters */
@@ -27,7 +31,7 @@ export function analyzeRoutes(
   cameras: ALPRCamera[],
   thresholdMeters: number = PROXIMITY_THRESHOLD_M,
 ): RouteAnalysis[] {
-  const analyses = routes.map((route) => {
+  const analyses = routes.map((route, originalIndex) => {
     const lineCoords = route.geometry.map(([lat, lng]) => [lng, lat]);
     const line = turf.lineString(lineCoords);
 
@@ -46,10 +50,38 @@ export function analyzeRoutes(
       alprCount: nearbyCameraIds.size,
       nearbyCameraIds,
       score: nearbyCameraIds.size,
+      label: '' as RouteLabel,
+      isDirect: originalIndex === 0, // OSRM's first result is the fastest
     };
   });
 
+  // Sort by camera count (fewest first)
   analyses.sort((a, b) => a.score - b.score);
+
+  // Assign labels
+  const directRoute = analyses.find((a) => a.isDirect)!;
+  const bestRoute = analyses[0]; // fewest cameras after sort
+
+  // Label the best avoidance route
+  if (bestRoute.alprCount === 0) {
+    bestRoute.label = 'Camera Free';
+  } else {
+    bestRoute.label = 'Least Surveillance';
+  }
+
+  // Label the direct route (if it's not already the best)
+  if (directRoute !== bestRoute) {
+    directRoute.label = 'Direct Route';
+  }
+
+  // Label remaining alternatives
+  let altNum = 1;
+  for (const a of analyses) {
+    if (!a.label) {
+      a.label = `Alternative ${altNum++}`;
+    }
+  }
+
   return analyses;
 }
 

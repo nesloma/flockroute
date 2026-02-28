@@ -17,6 +17,13 @@ function formatDuration(seconds: number): string {
   return `${hrs}h ${remainMins}m`;
 }
 
+function badgeClassForLabel(label: string): string {
+  if (label === 'Camera Free') return 'badge-free';
+  if (label === 'Least Surveillance') return 'badge-best';
+  if (label === 'Direct Route') return 'badge-direct';
+  return 'badge-alt';
+}
+
 function alprSeverityClass(count: number): string {
   if (count === 0) return 'low';
   if (count <= 3) return 'medium';
@@ -35,16 +42,16 @@ export function renderRoutesPanel(
   list.innerHTML = '';
 
   analyses.forEach((analysis, i) => {
+    const isBest = i === 0;
     const card = document.createElement('div');
-    card.className = `route-card${i === activeIndex ? ' active' : ''}${i === 0 ? ' recommended' : ''}`;
+    card.className = `route-card${i === activeIndex ? ' active' : ''}${isBest ? ' recommended' : ''}`;
     card.addEventListener('click', () => onSelect(i));
 
-    const badgeClass = i === 0 ? 'badge-best' : 'badge-alt';
-    const badgeText = i === 0 ? 'Least Surveillance' : `Alternative ${i}`;
+    const badgeClass = badgeClassForLabel(analysis.label);
     const sevClass = alprSeverityClass(analysis.alprCount);
 
     card.innerHTML = `
-      <span class="route-badge ${badgeClass}">${badgeText}</span>
+      <span class="route-badge ${badgeClass}">${analysis.label}</span>
       <div class="route-name">${analysis.route.summary || `Route ${i + 1}`}</div>
       <div class="route-stats">
         <div class="route-stat">
